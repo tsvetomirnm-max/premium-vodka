@@ -1,0 +1,9 @@
+{
+  "name": "premium-vodka",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "dependencies": {
+    "openai": "^4.56.0"
+  }
+}
