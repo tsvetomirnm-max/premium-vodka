@@ -2,55 +2,73 @@ export default function Home() {
   return (
     <div
       style={{
-        fontFamily: "system-ui, sans-serif",
-        background: "#0b0b0b",
-        color: "#f5f5f5",
+        fontFamily:
+          "'Helvetica Neue', Helvetica, Arial, sans-serif",
+        background: "#ffffff",
+        color: "#000000",
         textAlign: "center",
         minHeight: "100vh",
-        padding: "3rem 1rem",
+        padding: "4rem 1rem",
       }}
     >
-      <h1 style={{ fontSize: "3rem", letterSpacing: "2px" }}>PREMIUM VODKA</h1>
+      <h1
+        style={{
+          fontSize: "4rem",
+          fontWeight: "900",
+          letterSpacing: "1px",
+          marginBottom: "3rem",
+        }}
+      >
+        TRUE VODKA
+      </h1>
+
       <textarea
         id="prompt"
         placeholder="Type your question here..."
         style={{
           width: "90%",
           maxWidth: "700px",
-          height: "120px",
+          height: "140px",
           fontSize: "1rem",
           padding: "1rem",
-          borderRadius: "12px",
-          border: "none",
+          border: "2px solid #000",
+          borderRadius: "0", // sharp edges
           outline: "none",
           resize: "vertical",
+          color: "#000",
+          background: "#fff",
         }}
       ></textarea>
       <br />
       <button
         onClick={() => ask()}
         style={{
-          marginTop: "1rem",
+          marginTop: "1.5rem",
           padding: "0.8rem 2rem",
           fontSize: "1.1rem",
-          border: "none",
-          borderRadius: "8px",
-          background: "#e0e0e0",
+          fontWeight: "600",
+          border: "2px solid #000",
+          borderRadius: "0", // sharp
+          background: "#fff",
+          color: "#000",
           cursor: "pointer",
         }}
       >
         Ask
       </button>
+
       <pre
         id="output"
         style={{
-          marginTop: "2rem",
+          marginTop: "2.5rem",
           textAlign: "left",
           whiteSpace: "pre-wrap",
           wordWrap: "break-word",
-          background: "#1e1e1e",
+          background: "#fff",
+          color: "#000",
+          border: "2px solid #000",
+          borderRadius: "0", // sharp
           padding: "1rem",
-          borderRadius: "10px",
           width: "90%",
           maxWidth: "700px",
           marginLeft: "auto",
