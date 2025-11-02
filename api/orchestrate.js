@@ -117,24 +117,29 @@ export default async function handler(req, res) {
       }
     }
 
-    // 2) SELECT BEST RESPONDER (rule: highest watchdog confidence with answers_prompt=true)
-    //    If hard: watchdog is run on verifier-corrected text, else on responder text.
-    let bestIdx = 0;
-    let bestScore = -1;
-    for (let i = 0; i < responders_all.length; i++) {
-      const w = watchdogs_all[i] || {};
-      const ok = !!w.answers_prompt;
-      const score = ok ? Number(w.confidence || 0) : -1;
-      if (score > bestScore) { bestScore = score; bestIdx = i; }
-    }
+   // 2) SELECT BEST RESPONDER
+// Rule: for hard/ambiguous prompts, discard drafts whose verifier verdict is "needs_correction"
+// or watchdog says not answering / confidence < 0.6. Then pick highest watchdog confidence.
+let candidateIndices = [];
+for (let i = 0; i < responders_all.length; i++) {
+  const w = watchdogs_all[i] || {};
+  const v = verifiers_all[i];
+  const okAnswer = !!w.answers_prompt && Number(w.confidence || 0) >= (isHard ? 0.6 : 0.0);
+  const okVerdict = !isHard || !v || v.verdict !== "needs_correction";
+  if (okAnswer && okVerdict) candidateIndices.push(i);
+}
+// fallback if everything got filtered
+if (candidateIndices.length === 0) {
+  candidateIndices = responders_all.map((_, i) => i);
+}
 
-    const responder = responders_all[bestIdx];
-    // Always run final Verifier on the selected Responder (to get a corrected answer)
-    const verifier = isHard && verifiers_all[bestIdx]
-      ? verifiers_all[bestIdx]
-      : await runVerifier(client, responder);
-
-    let candidateAnswer = verifier?.corrected_answer || responder?.final_answer || "";
+let bestIdx = candidateIndices[0] ?? 0;
+let bestScore = -1;
+for (const i of candidateIndices) {
+  const w = watchdogs_all[i] || {};
+  const score = w.answers_prompt ? Number(w.confidence || 0) : -1;
+  if (score > bestScore) { bestScore = score; bestIdx = i; }
+}
 
     // 3) Watchdogs for record (selected)
     const watchdog_responder = await runWatchdog(client, prompt, responder?.final_answer || "");
