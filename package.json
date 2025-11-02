@@ -1,9 +1,12 @@
 {
-  "name": "premium-vodka",
-  "private": true,
-  "version": "0.0.1",
-  "type": "module",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start"
+  },
   "dependencies": {
-    "openai": "^4.56.0"
+    "next": "latest",
+    "react": "latest",
+    "react-dom": "latest"
   }
 }
