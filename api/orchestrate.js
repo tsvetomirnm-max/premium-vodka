@@ -236,20 +236,43 @@ for (const i of candidateIndices) {
       }
     }
 
-    // 8) Verdict (keep it transparent & simple)
-    let verdict = verifier?.verdict || "uncertain";
-    if (watchdog_verifier?.answers_prompt === false) verdict = "needs_correction";
-    if (watchdog_responder?.answers_prompt === false) verdict = "needs_correction";
+    // compute diversity flag from web scan (if available)
+let insufficient_diversity = false;
+if (useWeb && web_evidence && web_evidence.stats) {
+  if (Number(web_evidence.stats.unique_domains || 0) < 2) {
+    insufficient_diversity = true;
+  }
+}
 
-    const antiSeverity = (disprover?.severity || "").toLowerCase();
-    const objectionsRelevant = !!(objection_watchdog?.relevant_to_prompt);
-    if (objectionsRelevant && (antiSeverity === "medium" || antiSeverity === "high")) {
-      verdict = verdict === "strongly_supported" ? "mixed" : verdict;
-    }
-    if (negation_verifier?.any_issue) verdict = "mixed";
-    if (truth_scales?.overall === "refuted" || truth_scales?.overall === "insufficient") {
-      verdict = truth_scales.overall === "refuted" ? "needs_correction" : "mixed";
-    }
+
+// 8) Verdict (transparent & simple)
+let verdict = verifier?.verdict || "uncertain";
+if (watchdog_verifier?.answers_prompt === false) verdict = "needs_correction";
+if (watchdog_responder?.answers_prompt === false) verdict = "needs_correction";
+
+const antiSeverity = (disprover?.severity || "").toLowerCase();
+const objectionsRelevant = !!(objection_watchdog?.relevant_to_prompt);
+if (objectionsRelevant && (antiSeverity === "medium" || antiSeverity === "high")) {
+  verdict = verdict === "strongly_supported" ? "mixed" : verdict;
+}
+if (negation_verifier?.any_issue) verdict = "mixed";
+
+// Truth Scales influence + diversity requirement
+if (truth_scales?.overall === "refuted") {
+  verdict = "needs_correction";
+} else if (truth_scales?.overall === "insufficient" || insufficient_diversity) {
+  verdict = "mixed";
+}
+
+// Upgrade path after successful refinement:
+// if we changed the answer to address objections, watchdog still says it answers the prompt,
+// Truth Scales is supportive, and negation test is clean → upgrade to "ok" or "strongly_supported".
+if (refiner?.changed && watchdog_verifier?.answers_prompt && !negation_verifier?.any_issue) {
+  if (truth_scales?.overall === "supported") {
+    verdict = (verifier?.verdict === "strongly_supported") ? "strongly_supported" : "ok";
+  }
+}
+
 
     const final_answer = candidateAnswer;
 
@@ -260,6 +283,7 @@ for (const i of candidateIndices) {
       useOpinionator, useDisprover, useNegation, useWeb,
       web_note: web_evidence?.note || undefined,
       selected_idx: bestIdx,
+      web_diversity: insufficient_diversity ? "low" : "ok",
     };
 
     return res.status(200).json({
