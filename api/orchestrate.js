@@ -28,7 +28,7 @@ async function chatJSON(client, messages) {
   try { return JSON.parse(raw); } catch { return {}; }
 }
 
-// Helper: run one Responder
+// Helpers
 async function runResponder(client, prompt) {
   return chatJSON(client, [
     { role: "system", content: RESPONDER_SYS },
@@ -36,7 +36,6 @@ async function runResponder(client, prompt) {
   ]);
 }
 
-// Helper: run Watchdog on (prompt, answer)
 async function runWatchdog(client, prompt, answerText) {
   return chatJSON(client, [
     { role: "system", content: WATCHDOG_SYS },
@@ -50,7 +49,6 @@ async function runWatchdog(client, prompt, answerText) {
   ]);
 }
 
-// Helper: run Verifier on responder JSON
 async function runVerifier(client, responderJson) {
   return chatJSON(client, [
     { role: "system", content: VERIFIER_SYS },
@@ -82,19 +80,19 @@ export default async function handler(req, res) {
     const useNegation    = (req.query.negation    ?? "1") === "1";
     const useWeb         = (req.query.web         ?? "0") === "1";
 
-    // 0) VALUATOR — tells us difficulty & suggested.responders
+    // 0) VALUATOR
     const valuator = await chatJSON(client, [
       { role: "system", content: VALUATOR_SYS },
       { role: "user", content: prompt },
     ]);
     const suggestedResponders = Math.max(
       1,
-      Math.min(3, Number(valuator?.suggested?.responders || 1)) // cap at 3 for cost/latency
+      Math.min(3, Number(valuator?.suggested?.responders || 1))
     );
     const isHard =
       (valuator?.difficulty === "hard") || (valuator?.ambiguity === "high");
 
-    // 1) MULTI-RESPONDER FANOUT (K = suggestedResponders)
+    // 1) MULTI-RESPONDER FANOUT
     const responders_all = [];
     const verifiers_all = [];
     const watchdogs_all = [];
@@ -102,50 +100,56 @@ export default async function handler(req, res) {
     for (let i = 0; i < suggestedResponders; i++) {
       const r = await runResponder(client, prompt);
       responders_all.push(r);
-      // For complex questions, verify EACH draft before selection
+
       if (isHard) {
+        // verify each draft before selection
         const v = await runVerifier(client, r);
         verifiers_all.push(v);
         const candidate = v?.corrected_answer || r?.final_answer || "";
         const w = await runWatchdog(client, prompt, candidate);
         watchdogs_all.push(w);
       } else {
-        // For easy/medium, watchdog the raw responder answer
+        // watchdog raw responder answer (faster path)
         const w = await runWatchdog(client, prompt, r?.final_answer || "");
         watchdogs_all.push(w);
-        verifiers_all.push(null); // not used for selection in easy mode
+        verifiers_all.push(null);
       }
     }
 
-   // 2) SELECT BEST RESPONDER
-// Rule: for hard/ambiguous prompts, discard drafts whose verifier verdict is "needs_correction"
-// or watchdog says not answering / confidence < 0.6. Then pick highest watchdog confidence.
-let candidateIndices = [];
-for (let i = 0; i < responders_all.length; i++) {
-  const w = watchdogs_all[i] || {};
-  const v = verifiers_all[i];
-  const okAnswer = !!w.answers_prompt && Number(w.confidence || 0) >= (isHard ? 0.6 : 0.0);
-  const okVerdict = !isHard || !v || v.verdict !== "needs_correction";
-  if (okAnswer && okVerdict) candidateIndices.push(i);
-}
-// fallback if everything got filtered
-if (candidateIndices.length === 0) {
-  candidateIndices = responders_all.map((_, i) => i);
-}
+    // 2) SELECT BEST RESPONDER (with filters for hard prompts)
+    let candidateIndices = [];
+    for (let i = 0; i < responders_all.length; i++) {
+      const w = watchdogs_all[i] || {};
+      const v = verifiers_all[i];
+      const okAnswer = !!w.answers_prompt && Number(w.confidence || 0) >= (isHard ? 0.6 : 0.0);
+      const okVerdict = !isHard || !v || v.verdict !== "needs_correction";
+      if (okAnswer && okVerdict) candidateIndices.push(i);
+    }
+    if (candidateIndices.length === 0) {
+      candidateIndices = responders_all.map((_, i) => i);
+    }
 
-let bestIdx = candidateIndices[0] ?? 0;
-let bestScore = -1;
-for (const i of candidateIndices) {
-  const w = watchdogs_all[i] || {};
-  const score = w.answers_prompt ? Number(w.confidence || 0) : -1;
-  if (score > bestScore) { bestScore = score; bestIdx = i; }
-}
+    let bestIdx = candidateIndices[0] ?? 0;
+    let bestScore = -1;
+    for (const i of candidateIndices) {
+      const w = watchdogs_all[i] || {};
+      const score = w.answers_prompt ? Number(w.confidence || 0) : -1;
+      if (score > bestScore) { bestScore = score; bestIdx = i; }
+    }
+
+    const selectedResponder = responders_all[bestIdx];
+    const selectedVerifier = isHard && verifiers_all[bestIdx]
+      ? verifiers_all[bestIdx]
+      : await runVerifier(client, selectedResponder);
+
+    let candidateAnswer =
+      selectedVerifier?.corrected_answer || selectedResponder?.final_answer || "";
 
     // 3) Watchdogs for record (selected)
-    const watchdog_responder = await runWatchdog(client, prompt, responder?.final_answer || "");
+    const watchdog_responder = await runWatchdog(client, prompt, selectedResponder?.final_answer || "");
     const watchdog_verifier  = await runWatchdog(client, prompt, candidateAnswer);
 
-    // 4) (Optional) DISPROVER + OBJECTION WATCHDOG + REFINER
+    // 4) DISPROVER + OBJECTION WATCHDOG + REFINER
     let disprover = null, objection_watchdog = null, refiner = null;
     if (useDisprover) {
       disprover = await chatJSON(client, [
@@ -191,10 +195,10 @@ for (const i of candidateIndices) {
 
     // 5) NEGATION TEST (optional)
     let reverser = null, negation_verifier = null;
-    if (useNegation && Array.isArray(responder?.claims) && responder.claims.length > 0) {
+    if (useNegation && Array.isArray(selectedResponder?.claims) && selectedResponder.claims.length > 0) {
       reverser = await chatJSON(client, [
         { role: "system", content: REVERSER_SYS },
-        { role: "user", content: "CLAIMS:\n" + JSON.stringify(responder.claims, null, 2) },
+        { role: "user", content: "CLAIMS:\n" + JSON.stringify(selectedResponder.claims, null, 2) },
       ]);
       negation_verifier = await chatJSON(client, [
         { role: "system", content: VERIFIER_NEGATION_SYS },
@@ -212,9 +216,12 @@ for (const i of candidateIndices) {
     }
 
     // 7) WEB SCAN + TRUTH SCALES (optional; Brave-based)
-    let web_evidence = null, truth_scales = null;
+    let web_evidence = null, truth_scales = null, insufficient_diversity = false;
     if (useWeb) {
-      web_evidence = await webScan(prompt, 5); // { sources: [{title,url,snippet}], note }
+      web_evidence = await webScan(prompt, 5); // { sources: [{title,url,snippet}], note, stats }
+      if (web_evidence?.stats && Number(web_evidence.stats.unique_domains || 0) < 2) {
+        insufficient_diversity = true;
+      }
       if (Array.isArray(web_evidence?.sources) && web_evidence.sources.length > 0) {
         const evidence = web_evidence.sources.map((s, i) => ({
           title: s.title || `Source ${i + 1}`,
@@ -226,7 +233,7 @@ for (const i of candidateIndices) {
           {
             role: "user",
             content:
-              "CLAIMS:\n" + JSON.stringify(responder?.claims || [], null, 2) +
+              "CLAIMS:\n" + JSON.stringify(selectedResponder?.claims || [], null, 2) +
               "\n\nEVIDENCE SNIPPETS (title, url, text):\n" + JSON.stringify(evidence, null, 2) +
               "\n\nReturn ONLY the Truth Scales JSON.",
           },
@@ -236,43 +243,29 @@ for (const i of candidateIndices) {
       }
     }
 
-    // compute diversity flag from web scan (if available)
-let insufficient_diversity = false;
-if (useWeb && web_evidence && web_evidence.stats) {
-  if (Number(web_evidence.stats.unique_domains || 0) < 2) {
-    insufficient_diversity = true;
-  }
-}
+    // 8) Verdict
+    let verdict = selectedVerifier?.verdict || "uncertain";
+    if (watchdog_verifier?.answers_prompt === false) verdict = "needs_correction";
+    if (watchdog_responder?.answers_prompt === false) verdict = "needs_correction";
 
+    const antiSeverity = (disprover?.severity || "").toLowerCase();
+    const objectionsRelevant = !!(objection_watchdog?.relevant_to_prompt);
+    if (objectionsRelevant && (antiSeverity === "medium" || antiSeverity === "high")) {
+      verdict = verdict === "strongly_supported" ? "mixed" : verdict;
+    }
+    if (negation_verifier?.any_issue) verdict = "mixed";
 
-// 8) Verdict (transparent & simple)
-let verdict = verifier?.verdict || "uncertain";
-if (watchdog_verifier?.answers_prompt === false) verdict = "needs_correction";
-if (watchdog_responder?.answers_prompt === false) verdict = "needs_correction";
+    if (truth_scales?.overall === "refuted") {
+      verdict = "needs_correction";
+    } else if (truth_scales?.overall === "insufficient" || insufficient_diversity) {
+      verdict = "mixed";
+    }
 
-const antiSeverity = (disprover?.severity || "").toLowerCase();
-const objectionsRelevant = !!(objection_watchdog?.relevant_to_prompt);
-if (objectionsRelevant && (antiSeverity === "medium" || antiSeverity === "high")) {
-  verdict = verdict === "strongly_supported" ? "mixed" : verdict;
-}
-if (negation_verifier?.any_issue) verdict = "mixed";
-
-// Truth Scales influence + diversity requirement
-if (truth_scales?.overall === "refuted") {
-  verdict = "needs_correction";
-} else if (truth_scales?.overall === "insufficient" || insufficient_diversity) {
-  verdict = "mixed";
-}
-
-// Upgrade path after successful refinement:
-// if we changed the answer to address objections, watchdog still says it answers the prompt,
-// Truth Scales is supportive, and negation test is clean → upgrade to "ok" or "strongly_supported".
-if (refiner?.changed && watchdog_verifier?.answers_prompt && !negation_verifier?.any_issue) {
-  if (truth_scales?.overall === "supported") {
-    verdict = (verifier?.verdict === "strongly_supported") ? "strongly_supported" : "ok";
-  }
-}
-
+    if (refiner?.changed && watchdog_verifier?.answers_prompt && !negation_verifier?.any_issue) {
+      if (truth_scales?.overall === "supported") {
+        verdict = (selectedVerifier?.verdict === "strongly_supported") ? "strongly_supported" : "ok";
+      }
+    }
 
     const final_answer = candidateAnswer;
 
@@ -282,10 +275,11 @@ if (refiner?.changed && watchdog_verifier?.answers_prompt && !negation_verifier?
       isHard,
       useOpinionator, useDisprover, useNegation, useWeb,
       web_note: web_evidence?.note || undefined,
-      selected_idx: bestIdx,
       web_diversity: insufficient_diversity ? "low" : "ok",
+      selected_idx: bestIdx,
     };
 
+    // Return
     return res.status(200).json({
       ok: true,
       prompt,
@@ -294,8 +288,8 @@ if (refiner?.changed && watchdog_verifier?.answers_prompt && !negation_verifier?
       verifiers_all,
       watchdogs_all,
       selected_idx: bestIdx,
-      responder,
-      verifier,
+      responder: selectedResponder,
+      verifier: selectedVerifier,
       watchdog_responder,
       watchdog_verifier,
       disprover,
