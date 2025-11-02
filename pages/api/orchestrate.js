@@ -12,8 +12,8 @@ import {
   REVERSER_SYS,
   VERIFIER_NEGATION_SYS,
   TRUTH_SCALES_SYS,
-} from "../lib/roles.js";
-import { webScan } from "../lib/webscan.js";
+} from "../../lib/roles.js";
+import { webScan } from "../../lib/webscan.js";
 
 const MODEL = "gpt-4o-mini";
 
