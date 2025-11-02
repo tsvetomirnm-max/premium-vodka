@@ -1,9 +1,11 @@
+// api/orchestrate.js
 import OpenAI from "openai";
 import {
   RESPONDER_SYS,
   VERIFIER_SYS,
   VIABILITY_SYS,
   ANTI_FACT_SYS,
+  OBJECTION_VIABILITY_SYS,
 } from "../lib/roles.js";
 
 const MODEL = "gpt-4o-mini";
@@ -96,29 +98,32 @@ export default async function handler(req, res) {
       },
     ]);
 
-    // 6) VIABILITY on Anti-Fact output (are objections relevant to the prompt?)
+    // 6) OBJECTION VIABILITY → are Anti-Fact objections relevant to the prompt/answer?
     const antiText =
       Array.isArray(anti_fact?.objections)
         ? anti_fact.objections.map(o => `• ${o.claim_or_point}: ${o.rationale}`).join("\n")
         : "";
     const viability_anti = await chatJSON(client, [
-      { role: "system", content: VIABILITY_SYS },
+      { role: "system", content: OBJECTION_VIABILITY_SYS },
       {
         role: "user",
         content:
-          "PROMPT:\n" +
-          prompt +
-          "\n\nANSWER_TEXT (objections list):\n" +
-          antiText +
-          "\n\nReturn ONLY the Viability JSON.",
+          "PROMPT:\n" + prompt +
+          "\n\nANSWER_TEXT:\n" + candidateAnswer +
+          "\n\nOBJECTIONS:\n" + antiText +
+          "\n\nReturn ONLY the Objection Viability JSON.",
       },
     ]);
 
-    // Minimal final decision logic
+    // 7) Minimal final decision logic (we’ll refine as we add more roles)
     let verdict = verifier?.verdict || "uncertain";
     if (viability_verifier?.answers_prompt === false) verdict = "needs_correction";
     if (viability_responder?.answers_prompt === false) verdict = "needs_correction";
-    if ((anti_fact?.severity || "").toLowerCase() === "high") verdict = "mixed";
+
+    const antiSeverity = (anti_fact?.severity || "").toLowerCase();
+    if (viability_anti?.relevant_to_prompt && (antiSeverity === "medium" || antiSeverity === "high")) {
+      verdict = verdict === "strongly_supported" ? "mixed" : verdict;
+    }
 
     const final_answer = candidateAnswer;
 
